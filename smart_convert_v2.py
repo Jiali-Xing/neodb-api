@@ -95,6 +95,11 @@ class SmartMALToAniListConverter:
         original_title = anime_data['title']
         external_ids = anime_data.get('external_ids', {})
         
+        # 如果原標題已經在快取中，直接使用原標題，不需要 IMDB 搜尋
+        if original_title in self.search_cache:
+            print(f"  原標題已在快取中，跳過 IMDB 搜尋")
+            return original_title
+        
         # 如果原標題已經是英文，直接使用
         if re.match(r'^[a-zA-Z0-9\s\-:!?.,()&]+$', original_title):
             return original_title
@@ -104,6 +109,9 @@ class SmartMALToAniListConverter:
             english_title = self.get_english_title_from_imdb(external_ids['imdb'])
             if english_title:
                 print(f"  從 IMDB 獲取英文標題: {english_title}")
+                # 檢查英文標題是否已在快取中
+                if english_title in self.search_cache:
+                    print(f"  英文標題已在快取中")
                 return english_title
         
         # 嘗試從 TMDB 獲取英文標題
@@ -111,6 +119,9 @@ class SmartMALToAniListConverter:
             english_title = self.get_english_title_from_tmdb(external_ids['tmdb'])
             if english_title:
                 print(f"  從 TMDB 獲取英文標題: {english_title}")
+                # 檢查英文標題是否已在快取中
+                if english_title in self.search_cache:
+                    print(f"  英文標題已在快取中")
                 return english_title
         
         # 使用預設的中文到英文映射
@@ -162,8 +173,12 @@ class SmartMALToAniListConverter:
         clean_title = re.sub(r'\s*第[一二三四五六七八九十\d]+季?', '', clean_title).strip()
         
         if clean_title in title_map:
-            print(f"  使用預設映射: {title_map[clean_title]}")
-            return title_map[clean_title]
+            mapped_title = title_map[clean_title]
+            print(f"  使用預設映射: {mapped_title}")
+            # 檢查映射的標題是否已在快取中
+            if mapped_title in self.search_cache:
+                print(f"  映射標題已在快取中")
+            return mapped_title
         
         # 如果都沒有，返回清理後的原標題
         return clean_title
