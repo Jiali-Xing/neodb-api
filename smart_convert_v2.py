@@ -124,63 +124,9 @@ class SmartMALToAniListConverter:
                     print(f"  英文標題已在快取中")
                 return english_title
         
-        # 使用預設的中文到英文映射
-        title_map = {
-            'Angel Beats!': 'Angel Beats',
-            '會長是女僕大人！': 'Kaichou wa Maid-sama',
-            '灼眼的夏娜': 'Shakugan no Shana',
-            '緣之空': 'Yosuga no Sora',
-            '狼与香辛料': 'Spice and Wolf',
-            '緋彈的亞莉亞': 'Aria the Scarlet Ammo',
-            '笨蛋，測驗，召喚獸': 'Baka to Test to Shoukanjuu',
-            '我的朋友很少': 'Boku wa Tomodachi ga Sukunai',
-            '命運石之門': 'Steins Gate',
-            '四月是你的謊言': 'Shigatsu wa Kimi no Uso',
-            '化物語': 'Bakemonogatari',
-            '我的青春恋爱物语果然有问题': 'Oregairu',
-            '不起眼女主角培育法': 'Saenai Heroine no Sodatekata',
-            '替身': 'Another',
-            '命運石之門0': 'Steins Gate 0',
-            '寄生獸': 'Parasyte',
-            '月刊少女野崎同學': 'Gekkan Shoujo Nozaki-kun',
-            '紫羅蘭永恆花園': 'Violet Evergarden',
-            '死亡筆記本': 'Death Note',
-            '進擊的巨人': 'Attack on Titan',
-            '新世紀福音戰士': 'Neon Genesis Evangelion',
-            '星際牛仔': 'Cowboy Bebop',
-            '混沌武士': 'Samurai Champloo',
-            '葬送的芙莉蓮': 'Frieren Beyond Journey End',
-            '狂賭之淵': 'Kakegurui',
-            '比翼之吻': 'Darling in the FranXX',
-            '為美好的世界獻上祝福': 'KonoSuba',
-            '甲賀忍法帖': 'Basilisk',
-            '妖精的旋律': 'Elfen Lied',
-            '娜娜': 'NANA',
-            'ef - a tale of memories': 'ef A Tale of Memories',
-            '強風吹拂': 'Run with the Wind',
-            '迷宮飯': 'Delicious in Dungeon',
-            '天降之物': 'Heavens Lost Property',
-            '我們仍未知道那天所看見的花名': 'Anohana',
-            '零之使魔': 'Zero no Tsukaima',
-            '這就是僵尸嗎': 'Kore wa Zombie Desu ka',
-            '出包王女': 'To Love Ru',
-            '惡魔高校D×D': 'High School DxD',
-            '美少女死神': 'Shinigami no Ballad'
-        }
-        
-        # 清理標題並查找映射
+        # 如果都沒有，返回清理後的原標題
         clean_title = re.sub(r'\s*\([^)]*\)', '', original_title).strip()
         clean_title = re.sub(r'\s*第[一二三四五六七八九十\d]+季?', '', clean_title).strip()
-        
-        if clean_title in title_map:
-            mapped_title = title_map[clean_title]
-            print(f"  使用預設映射: {mapped_title}")
-            # 檢查映射的標題是否已在快取中
-            if mapped_title in self.search_cache:
-                print(f"  映射標題已在快取中")
-            return mapped_title
-        
-        # 如果都沒有，返回清理後的原標題
         return clean_title
         
     def extract_ids_from_info(self, info_str: str) -> Dict[str, str]:
