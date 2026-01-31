@@ -312,10 +312,9 @@ class SmartMALToAniListConverter:
             response = self.session.get(url)
             if response.status_code == 200:
                 text = response.text
-                # 更精確的檢查：尋找 genre 標籤中的 Animation
-                has_animation = bool(re.search(r'<span[^>]*>Animation</span>', text, re.IGNORECASE))
-                # 檢查國家是否為日本
-                is_japan = bool(re.search(r'<a[^>]*>Japan</a>', text))
+                # 簡單檢查：同時包含 Animation 和 Japan
+                has_animation = 'Animation' in text
+                is_japan = 'Japan' in text
                 result = has_animation
                 print(f"  IMDB 檢查: Animation={has_animation}, Japan={is_japan}")
                 
