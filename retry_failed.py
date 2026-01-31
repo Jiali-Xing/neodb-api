@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-直接通過 AniList API 導入數據
+重試失敗的導入
 """
 
 import json
@@ -23,43 +23,23 @@ def load_neodb_metadata(csv_file_path):
             metadata[title] = {'timestamp': timestamp, 'rating': rating, 'comment': comment}
     return metadata
 
-def import_to_anilist(json_file_path, neodb_csv_path, access_token):
-    """直接通過 AniList API 導入"""
+def retry_failed_imports(failed_file, json_file, neodb_csv, access_token):
+    """重試失敗的導入"""
     
-    # Validate token first
-    test_query = 'query { Viewer { id name } }'
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    
-    print(f"Debug: Token length = {len(access_token)}")
-    print(f"Debug: Token starts with = {access_token[:30]}...")
-    
-    try:
-        response = requests.post(
-            'https://graphql.anilist.co',
-            json={'query': test_query},
-            headers=headers
-        )
-        if response.status_code != 200 or 'errors' in response.json():
-            print(f"❌ Token validation failed: {response.text}")
-            print("\nPlease get a valid token from: https://anilist.co/settings/developer")
-            return
-        print(f"✓ Token validated for user: {response.json()['data']['Viewer']['name']}\n")
-    except Exception as e:
-        print(f"❌ Failed to validate token: {e}")
+    if not os.path.exists(failed_file):
+        print(f"❌ 找不到文件: {failed_file}")
         return
     
-    # Load data
-    with open(json_file_path, 'r', encoding='utf-8') as f:
+    with open(failed_file, 'r', encoding='utf-8') as f:
+        entries = json.load(f)
+    
+    with open(json_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    neodb_metadata = load_neodb_metadata(neodb_csv_path)
-    entries = data['anilistImport']['lists'][0]['entries']
+    neodb_metadata = load_neodb_metadata(neodb_csv)
     
-    # AniList mutation
+    print(f"準備重試 {len(entries)} 個失敗的條目...\n")
+    
     mutation = '''
     mutation ($mediaId: Int, $status: MediaListStatus, $score: Float, $progress: Int, $startedAt: FuzzyDateInput, $completedAt: FuzzyDateInput, $notes: String) {
         SaveMediaListEntry (mediaId: $mediaId, status: $status, score: $score, progress: $progress, startedAt: $startedAt, completedAt: $completedAt, notes: $notes) {
@@ -69,9 +49,15 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
     }
     '''
     
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    }
+    
     success_count = 0
     failed_count = 0
-    failed_entries = []
+    still_failed = []
     
     for entry in entries:
         media_id = entry['mediaId']
@@ -91,7 +77,6 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
         completed_at = None
         
         if detailed_info:
-            # Try multiple title fields for matching
             possible_titles = [
                 detailed_info.get('searchTitle', ''),
                 detailed_info.get('originalTitle', ''),
@@ -99,7 +84,6 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
                 detailed_info.get('romajiTitle', '')
             ]
             
-            # Also try splitting titles by ' / ' to match Chinese/English variants
             expanded_titles = []
             for title in possible_titles:
                 if title:
@@ -144,7 +128,7 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
                     except:
                         pass
             else:
-                print(f"  → No metadata found for: {' / '.join(filter(None, possible_titles))}")
+                print(f"  → No metadata found for: {' / '.join(filter(None, expanded_titles[:2]))}")
         
         variables = {
             'mediaId': media_id,
@@ -171,36 +155,31 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
                 print(f"✓ Imported media ID {media_id}")
             else:
                 failed_count += 1
-                error_data = response.json()
                 print(f"✗ Failed media ID {media_id}: {response.text}")
-                
-                # Save failed entry for retry
-                if 'errors' in error_data and any('Too Many Requests' in str(e) for e in error_data['errors']):
-                    failed_entries.append(entry)
+                still_failed.append(entry)
             
-            time.sleep(10)  # Rate limit: use 2s to be safe, same as retry script
+            time.sleep(2.0)  # Even slower for retry
             
         except Exception as e:
             failed_count += 1
-            failed_entries.append(entry)
+            still_failed.append(entry)
             print(f"✗ Error importing media ID {media_id}: {e}")
     
-    # Save failed entries
-    if failed_entries:
-        os.makedirs('tmp', exist_ok=True)
-        failed_file = 'tmp/failed_entries.json'
+    # Update failed entries file
+    if still_failed:
         with open(failed_file, 'w', encoding='utf-8') as f:
-            json.dump(failed_entries, f, indent=2, ensure_ascii=False)
-        print(f"\n💾 Saved {len(failed_entries)} failed entries to {failed_file}")
+            json.dump(still_failed, f, indent=2, ensure_ascii=False)
+        print(f"\n💾 Updated {failed_file} with {len(still_failed)} still-failed entries")
+    else:
+        os.remove(failed_file)
+        print(f"\n🎉 All entries imported successfully! Removed {failed_file}")
     
     print(f"\n完成！成功: {success_count}, 失敗: {failed_count}")
 
 if __name__ == "__main__":
-    # 從環境變量或配置文件讀取 access token
     ACCESS_TOKEN = os.environ.get('ANILIST_TOKEN')
     
     if not ACCESS_TOKEN:
-        # 嘗試從 .env 文件讀取
         if os.path.exists('.env'):
             with open('.env', 'r', encoding='utf-8') as f:
                 content = f.read().strip()
@@ -208,15 +187,12 @@ if __name__ == "__main__":
                     ACCESS_TOKEN = content.split('=', 1)[1].strip()
     
     if not ACCESS_TOKEN:
-        ACCESS_TOKEN = input("請輸入你的 AniList Access Token: ").strip()
-    
-    if not ACCESS_TOKEN:
         print("錯誤: 需要 Access Token")
-        print("請訪問 https://anilist.co/settings/developer 獲取")
-        print("然後創建 .env 文件並添加: ANILIST_TOKEN=你的token")
         exit(1)
     
-    json_file = "anilist_import_from_neodb.json"
-    neodb_csv = "neodb/tv_mark.csv"
-    
-    import_to_anilist(json_file, neodb_csv, ACCESS_TOKEN)
+    retry_failed_imports(
+        'tmp/failed_entries.json',
+        'anilist_import_from_neodb.json',
+        'neodb/tv_mark.csv',
+        ACCESS_TOKEN
+    )

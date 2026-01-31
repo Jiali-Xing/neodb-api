@@ -365,8 +365,19 @@ class SmartMALToAniListConverter:
             if all_cached and has_null_cache:
                 print(f"  所有搜尋嘗試都已快取且結果為空，跳過")
                 skipped_count += 1
-                # 不處理空結果，直接跳過
-                failed_searches.append(anime['title'])
+                # 也保存未找到的條目資訊
+                failed_anime = {
+                    'originalTitle': anime['title'],
+                    'searchTitle': english_title,
+                    'sourceFile': anime['source_file'],
+                    'externalIds': anime['external_ids'],
+                    'status': anime['status'],
+                    'progress': anime['progress']
+                }
+                if anime['score']:
+                    failed_anime['score'] = anime['score']
+                    
+                failed_searches.append(failed_anime)
                 print(f"  ✗ 已知未找到（快取）")
                 continue
             elif all_cached:
@@ -378,6 +389,29 @@ class SmartMALToAniListConverter:
                     if attempt and self.search_cache.get(attempt):
                         result = self.search_cache[attempt]
                         print(f"  從快取獲取結果: '{attempt}' (無延遲)")
+                        # 為已快取的結果也生成完整資訊
+                        converted_anime = {
+                            'mediaId': result['id'],
+                            'status': anime['status'],
+                            'progress': anime['progress'],
+                            'originalTitle': anime['title'],
+                            'searchTitle': attempt,
+                            'sourceFile': anime['source_file'],
+                            'externalIds': anime['external_ids'],
+                            'anilistInfo': {
+                                'title': result['title'],
+                                'year': result.get('startDate', {}).get('year'),
+                                'averageScore': result.get('averageScore')
+                            }
+                        }
+                        if anime['score']:
+                            converted_anime['score'] = anime['score']
+                        converted_list.append(converted_anime)
+                        
+                        titles = result['title']
+                        found_title = titles.get('english') or titles.get('romaji') or titles.get('native')
+                        year = result.get('startDate', {}).get('year', '')
+                        print(f"  ✓ 找到: {found_title} ({year}) (ID: {result['id']})")
                         break
             else:
                 # 逐一嘗試搜尋（只搜尋未快取的）
@@ -403,7 +437,17 @@ class SmartMALToAniListConverter:
                 converted_anime = {
                     'mediaId': result['id'],
                     'status': anime['status'],
-                    'progress': anime['progress']
+                    'progress': anime['progress'],
+                    # 保存原始資訊以便合併
+                    'originalTitle': anime['title'],
+                    'searchTitle': english_title,
+                    'sourceFile': anime['source_file'],
+                    'externalIds': anime['external_ids'],
+                    'anilistInfo': {
+                        'title': result['title'],
+                        'year': result.get('startDate', {}).get('year'),
+                        'averageScore': result.get('averageScore')
+                    }
                 }
                 
                 if anime['score']:
@@ -415,31 +459,70 @@ class SmartMALToAniListConverter:
                 year = result.get('startDate', {}).get('year', '')
                 print(f"  ✓ 找到: {found_title} ({year}) (ID: {result['id']})")
             else:
-                failed_searches.append(anime['title'])
+                # 也保存未找到的條目資訊
+                failed_anime = {
+                    'originalTitle': anime['title'],
+                    'searchTitle': english_title,
+                    'sourceFile': anime['source_file'],
+                    'externalIds': anime['external_ids'],
+                    'status': anime['status'],
+                    'progress': anime['progress']
+                }
+                if anime['score']:
+                    failed_anime['score'] = anime['score']
+                    
+                failed_searches.append(failed_anime)
                 print(f"  ✗ 未找到")
         
         # 儲存結果
-        result = {
-            'lists': [{
-                'name': 'Anime List from neodb',
-                'entries': converted_list
-            }]
+        result_data = {
+            'metadata': {
+                'convertedAt': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'totalProcessed': len(anime_list),
+                'successfullyConverted': len(converted_list),
+                'failed': len(failed_searches),
+                'skipped': skipped_count
+            },
+            'anilistImport': {
+                'lists': [{
+                    'name': 'Anime List from neodb',
+                    'entries': [{
+                        'mediaId': item['mediaId'],
+                        'status': item['status'],
+                        'progress': item['progress'],
+                        **(({'score': item['score']} if 'score' in item else {}))
+                    } for item in converted_list]
+                }]
+            },
+            'detailedResults': {
+                'successful': converted_list,
+                'failed': failed_searches
+            }
         }
         
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+            json.dump(result_data, f, ensure_ascii=False, indent=2)
+        
+        # 另外儲存純 AniList 格式的檔案
+        anilist_only_file = output_file.replace('.json', '_anilist_only.json')
+        with open(anilist_only_file, 'w', encoding='utf-8') as f:
+            json.dump(result_data['anilistImport'], f, ensure_ascii=False, indent=2)
         
         print(f"\n轉換完成！")
         print(f"成功轉換: {len(converted_list)} 部")
         print(f"轉換失敗: {len(failed_searches)} 部")
         print(f"跳過搜尋（已快取）: {skipped_count} 部")
-        print(f"結果儲存至: {output_file}")
+        print(f"完整結果儲存至: {output_file}")
+        print(f"AniList 專用格式儲存至: {anilist_only_file}")
         print(f"搜尋快取儲存至: {self.cache_file}")
         
         if failed_searches:
             print(f"\n未找到的動畫（前10個）:")
-            for title in failed_searches[:10]:
-                print(f"  - {title}")
+            for item in failed_searches[:10]:
+                if isinstance(item, dict):
+                    print(f"  - {item['originalTitle']}")
+                else:
+                    print(f"  - {item}")
             if len(failed_searches) > 10:
                 print(f"  ... 還有 {len(failed_searches) - 10} 個")
 
