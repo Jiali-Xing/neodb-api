@@ -5,11 +5,102 @@
 
 import json
 import requests
+import time
+import re
+import html
+import os
 
 class IMDBToAniListMapper:
     def __init__(self):
         self.id_mapping = {}
         self.mapping_url = 'https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json'
+        self.anilist_url = 'https://graphql.anilist.co'
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        self.search_cache = self.load_cache()
+        self.api_delay = 1.5
+    
+    def load_cache(self):
+        if os.path.exists('search_cache.json'):
+            try:
+                with open('search_cache.json', 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
+    
+    def save_cache(self):
+        with open('search_cache.json', 'w', encoding='utf-8') as f:
+            json.dump(self.search_cache, f, ensure_ascii=False, indent=2)
+    
+    def get_english_title_from_imdb(self, imdb_id):
+        try:
+            url = f'https://www.imdb.com/title/{imdb_id}/'
+            response = self.session.get(url)
+            if response.status_code == 200:
+                text = response.text
+                # Extract title and year from <title>Title (2011) - IMDb</title>
+                title_match = re.search(r'<title>([^<]+?)\s*\((\d{4})\)', text)
+                if title_match:
+                    title = title_match.group(1).strip()
+                    year = int(title_match.group(2))
+                    title = html.unescape(title).strip('"\'')
+                    return title, year
+            time.sleep(3)
+            return None, None
+        except Exception as e:
+            print(f"  IMDB 錯誤: {e}")
+            time.sleep(3)
+            return None, None
+    
+    def search_anilist_by_title(self, title, year=None):
+        cache_key = f"{title}|{year}" if year else title
+        if cache_key in self.search_cache:
+            return self.search_cache[cache_key]
+        
+        query = '''
+        query ($search: String, $startYear: Int) {
+            Page(page: 1, perPage: 5) {
+                media(search: $search, type: ANIME, startDate_like: $startYear) {
+                    id
+                    title { romaji english native }
+                    synonyms
+                    startDate { year }
+                }
+            }
+        }
+        '''
+        
+        try:
+            variables = {'search': title}
+            if year:
+                variables['startYear'] = f"{year}%"
+            
+            response = self.session.post(
+                self.anilist_url,
+                json={'query': query, 'variables': variables}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                media_list = data.get('data', {}).get('Page', {}).get('media', [])
+                if media_list:
+                    result = media_list[0]
+                    self.search_cache[cache_key] = result
+                    self.save_cache()
+                    return result
+                else:
+                    self.search_cache[cache_key] = None
+                    self.save_cache()
+            
+            time.sleep(self.api_delay)
+            return None
+        except Exception as e:
+            print(f"  搜尋錯誤: {e}")
+            time.sleep(self.api_delay)
+            return None
     
     def load_id_mapping(self):
         """從 GitHub 下載 ID 映射表"""
@@ -63,6 +154,17 @@ class IMDBToAniListMapper:
                 continue
             
             anilist_id = self.id_mapping.get(imdb_id)
+            
+            if not anilist_id:
+                # 嘗試用英文標題+年份搜尋
+                print(f"  未找到映射，嘗試標題搜尋...")
+                english_title, year = self.get_english_title_from_imdb(imdb_id)
+                if english_title:
+                    print(f"  英文標題: {english_title} ({year})")
+                    result = self.search_anilist_by_title(english_title, year)
+                    if result:
+                        anilist_id = result['id']
+                        print(f"  ✓ 標題搜尋成功: {anilist_id}")
             
             if anilist_id:
                 converted_anime = {

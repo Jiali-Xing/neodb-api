@@ -52,6 +52,39 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
         print(f"❌ Failed to validate token: {e}")
         return
     
+    # Load existing list
+    print("Loading existing AniList entries...")
+    existing_ids = set()
+    list_query = '''
+    query ($userId: Int, $type: MediaType) {
+        MediaListCollection(userId: $userId, type: $type) {
+            lists {
+                entries {
+                    mediaId
+                }
+            }
+        }
+    }
+    '''
+    
+    try:
+        user_id = response.json()['data']['Viewer']['id']
+        response = requests.post(
+            'https://graphql.anilist.co',
+            json={'query': list_query, 'variables': {'userId': user_id, 'type': 'ANIME'}},
+            headers=headers
+        )
+        if response.status_code == 200:
+            data = response.json()
+            for list_group in data.get('data', {}).get('MediaListCollection', {}).get('lists', []):
+                for entry in list_group.get('entries', []):
+                    existing_ids.add(entry['mediaId'])
+            print(f"✓ Found {len(existing_ids)} existing entries\n")
+        time.sleep(4)
+    except Exception as e:
+        print(f"⚠ Failed to load existing list: {e}")
+        print("Continuing without checking existing entries...\n")
+    
     # Load data
     with open(json_file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -71,10 +104,18 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
     
     success_count = 0
     failed_count = 0
+    skipped_count = 0
     failed_entries = []
     
     for entry in entries:
         media_id = entry['mediaId']
+        
+        # Skip if already exists
+        if media_id in existing_ids:
+            skipped_count += 1
+            print(f"⊘ Skipped media ID {media_id} (already exists)")
+            continue
+        
         status = entry['status']
         score = entry.get('score', 0)
         progress = entry.get('progress', 0)
@@ -178,7 +219,7 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
                 if 'errors' in error_data and any('Too Many Requests' in str(e) for e in error_data['errors']):
                     failed_entries.append(entry)
             
-            time.sleep(10)  # Rate limit: use 2s to be safe, same as retry script
+            time.sleep(5)  # Rate limit: use 2s to be safe, same as retry script
             
         except Exception as e:
             failed_count += 1
@@ -193,7 +234,7 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
             json.dump(failed_entries, f, indent=2, ensure_ascii=False)
         print(f"\n💾 Saved {len(failed_entries)} failed entries to {failed_file}")
     
-    print(f"\n完成！成功: {success_count}, 失敗: {failed_count}")
+    print(f"\n完成！成功: {success_count}, 跳過: {skipped_count}, 失敗: {failed_count}")
 
 if __name__ == "__main__":
     # 從環境變量或配置文件讀取 access token

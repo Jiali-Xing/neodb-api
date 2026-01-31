@@ -96,24 +96,27 @@ class NeoDBToAniListMangaConverter:
         return status_map.get(status, 'PLANNING')
     
     def is_likely_manga(self, title: str, info: str, links: str) -> bool:
-        """判斷是否可能是漫畫"""
-        # 有 bgm.tv/subject 連結的可能是漫畫
-        if 'bgm.tv/subject' in links:
+        """判斷是否可能是漫畫 - 更嚴格的檢查"""
+        # 必須有 bgm.tv 鏈接才認為是漫畫
+        if 'bgm.tv' in links:
             return True
         
-        # 包含漫畫相關關鍵字
+        # 或者明確包含漫畫關鍵字
         manga_keywords = [
-            '漫畫', 'manga', 'comic', '單行本', '完全版',
-            '第.*卷', '第.*集', '全.*卷'
+            '漫畫', 'manga', 'comic'
         ]
         
         for keyword in manga_keywords:
-            if re.search(keyword, title.lower()):
+            if keyword in title.lower():
                 return True
         
-        # 包含日文字符
-        if re.search(r'[\u3040-\u309F\u30A0-\u30FF]', title):
-            return True
+        # 檢查 author 是否是知名漫畫家（可選）
+        if 'author:' in info:
+            # 如果有日文作者名且標題也有日文，可能是漫畫
+            has_japanese_author = bool(re.search(r'author:[^,]*[\u3040-\u309F\u30A0-\u30FF\u4e00-\u9fff]', info))
+            has_japanese_title = bool(re.search(r'[\u3040-\u309F\u30A0-\u30FF]', title))
+            if has_japanese_author and has_japanese_title:
+                return True
         
         return False
     
