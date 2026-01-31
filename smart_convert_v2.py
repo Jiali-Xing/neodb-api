@@ -9,7 +9,7 @@ import os
 from typing import Dict, List, Optional
 
 class SmartMALToAniListConverter:
-    def __init__(self, api_delay=6, imdb_delay=5):
+    def __init__(self, api_delay=9, imdb_delay=3):
         self.anilist_url = 'https://graphql.anilist.co'
         self.omdb_api_key = None  # 可以設置 OMDB API key
         self.session = requests.Session()
@@ -17,7 +17,9 @@ class SmartMALToAniListConverter:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         self.cache_file = 'search_cache.json'
+        self.imdb_cache_file = 'imdb_anime_cache.json'
         self.search_cache = self.load_cache()
+        self.imdb_anime_cache = self.load_imdb_cache()
         self.api_delay = api_delay  # AniList API 延遲
         self.imdb_delay = imdb_delay  # IMDB/TMDB API 延遲
         
@@ -35,6 +37,21 @@ class SmartMALToAniListConverter:
         """儲存搜尋快取"""
         with open(self.cache_file, 'w', encoding='utf-8') as f:
             json.dump(self.search_cache, f, ensure_ascii=False, indent=2)
+    
+    def load_imdb_cache(self) -> Dict:
+        """載入 IMDB 動畫檢查快取"""
+        if os.path.exists(self.imdb_cache_file):
+            try:
+                with open(self.imdb_cache_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
+    
+    def save_imdb_cache(self):
+        """儲存 IMDB 動畫檢查快取"""
+        with open(self.imdb_cache_file, 'w', encoding='utf-8') as f:
+            json.dump(self.imdb_anime_cache, f, ensure_ascii=False, indent=2)
         
     def get_english_title_from_imdb(self, imdb_id: str) -> Optional[str]:
         """從 IMDB 獲取英文標題"""
@@ -282,37 +299,48 @@ class SmartMALToAniListConverter:
         
         return anime_list
     
+    def check_imdb_for_anime(self, imdb_id: str) -> bool:
+        """檢查 IMDB 是否標記為動畫"""
+        # 檢查快取
+        if imdb_id in self.imdb_anime_cache:
+            result = self.imdb_anime_cache[imdb_id]
+            print(f"  IMDB 快取: Animation={result}")
+            return result
+        
+        try:
+            url = f'https://www.imdb.com/title/{imdb_id}/'
+            response = self.session.get(url)
+            if response.status_code == 200:
+                text = response.text
+                # 更精確的檢查：尋找 genre 標籤中的 Animation
+                has_animation = bool(re.search(r'<span[^>]*>Animation</span>', text, re.IGNORECASE))
+                # 檢查國家是否為日本
+                is_japan = bool(re.search(r'<a[^>]*>Japan</a>', text))
+                result = has_animation
+                print(f"  IMDB 檢查: Animation={has_animation}, Japan={is_japan}")
+                
+                # 儲存到快取
+                self.imdb_anime_cache[imdb_id] = result
+                self.save_imdb_cache()
+                
+                time.sleep(self.imdb_delay)  # 避免 IMDB 速率限制
+                return result
+            return False
+        except Exception as e:
+            print(f"  IMDB 檢查錯誤: {e}")
+            return False
+    
     def is_likely_anime(self, title: str, info: str, links: str) -> bool:
         """判斷是否可能是動畫"""
-        # 有 bgm.tv 連結的很可能是動畫
-        if 'bgm.tv' in links:
-            return True
-        
-        # 包含動畫相關關鍵字
-        anime_keywords = [
-            'season', '第一季', '第二季', '第三季', '第四季', 
-            'ova', 'tv', '劇場版', '特別篇', '番外篇',
-            '動畫', 'anime', '第一部', '第二部'
-        ]
-        
-        if any(keyword in title.lower() for keyword in anime_keywords):
-            return True
-        
-        # 包含日文字符
-        if re.search(r'[\u3040-\u309F\u30A0-\u30FF]', title):
-            return True
-        
-        # 已知的動畫標題模式
-        anime_patterns = [
-            r'.*第\d+季',
-            r'.*OVA',
-            r'.*劇場版',
-            r'.*特別篇'
-        ]
-        
-        for pattern in anime_patterns:
-            if re.search(pattern, title):
+        # 檢查 IMDB 是否標記為日本動畫
+        imdb_match = re.search(r'imdb:(tt\d+)', info)
+        if imdb_match:
+            imdb_id = imdb_match.group(1)
+            if self.check_imdb_for_anime(imdb_id):
+                print(f"  ✓ IMDB 確認為日本動畫: {title}")
                 return True
+            else:
+                print(f"  ✗ IMDB 非日本動畫: {title}")
         
         return False
     
