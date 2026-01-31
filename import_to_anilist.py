@@ -71,6 +71,7 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
     
     success_count = 0
     failed_count = 0
+    failed_entries = []
     
     for entry in entries:
         media_id = entry['mediaId']
@@ -90,9 +91,32 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
         completed_at = None
         
         if detailed_info:
-            search_title = detailed_info.get('searchTitle', '') or detailed_info.get('originalTitle', '')
-            if search_title in neodb_metadata:
-                meta = neodb_metadata[search_title]
+            # Try multiple title fields for matching
+            possible_titles = [
+                detailed_info.get('searchTitle', ''),
+                detailed_info.get('originalTitle', ''),
+                detailed_info.get('englishTitle', ''),
+                detailed_info.get('romajiTitle', '')
+            ]
+            
+            # Also try splitting titles by ' / ' to match Chinese/English variants
+            expanded_titles = []
+            for title in possible_titles:
+                if title:
+                    expanded_titles.append(title)
+                    if ' / ' in title:
+                        expanded_titles.extend(title.split(' / '))
+            
+            meta = None
+            matched_title = None
+            for title in expanded_titles:
+                title = title.strip()
+                if title and title in neodb_metadata:
+                    meta = neodb_metadata[title]
+                    matched_title = title
+                    break
+            
+            if meta:
                 notes = meta.get('comment', '')
                 
                 if meta['timestamp']:
@@ -103,20 +127,24 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
                             'month': ts.month,
                             'day': ts.day
                         }
-                        start_ts = ts - timedelta(days=30)
+                        days_to_watch = max(progress, 1) if progress else 7
+                        start_ts = ts - timedelta(days=days_to_watch)
                         started_at = {
                             'year': start_ts.year,
                             'month': start_ts.month,
                             'day': start_ts.day
                         }
-                    except:
-                        pass
+                        print(f"  → {matched_title}: {ts.date()} (from CSV)")
+                    except Exception as e:
+                        print(f"  → Failed to parse timestamp for {matched_title}: {e}")
                 
                 if meta['rating'] and not score:
                     try:
                         score = float(meta['rating'])
                     except:
                         pass
+            else:
+                print(f"  → No metadata found for: {' / '.join(filter(None, possible_titles))}")
         
         variables = {
             'mediaId': media_id,
@@ -127,6 +155,9 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
             'completedAt': completed_at,
             'notes': notes
         }
+        
+        if completed_at:
+            print(f"    Dates: started={started_at}, completed={completed_at}")
         
         try:
             response = requests.post(
@@ -140,13 +171,27 @@ def import_to_anilist(json_file_path, neodb_csv_path, access_token):
                 print(f"✓ Imported media ID {media_id}")
             else:
                 failed_count += 1
+                error_data = response.json()
                 print(f"✗ Failed media ID {media_id}: {response.text}")
+                
+                # Save failed entry for retry
+                if 'errors' in error_data and any('Too Many Requests' in str(e) for e in error_data['errors']):
+                    failed_entries.append(entry)
             
-            time.sleep(0.6)  # Rate limit: ~1 request per second
+            time.sleep(2.0)  # Rate limit: use 2s to be safe, same as retry script
             
         except Exception as e:
             failed_count += 1
+            failed_entries.append(entry)
             print(f"✗ Error importing media ID {media_id}: {e}")
+    
+    # Save failed entries
+    if failed_entries:
+        os.makedirs('tmp', exist_ok=True)
+        failed_file = 'tmp/failed_entries.json'
+        with open(failed_file, 'w', encoding='utf-8') as f:
+            json.dump(failed_entries, f, indent=2, ensure_ascii=False)
+        print(f"\n💾 Saved {len(failed_entries)} failed entries to {failed_file}")
     
     print(f"\n完成！成功: {success_count}, 失敗: {failed_count}")
 

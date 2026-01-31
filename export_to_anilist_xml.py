@@ -6,30 +6,40 @@ Script to convert anilist_import_from_neodb.json to XML format for AniList impor
 import json
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
+import csv
+from datetime import datetime, timedelta
 
-def create_anilist_xml(json_file_path, output_xml_path):
+def load_neodb_metadata(csv_file_path):
+    """Load timestamp, rating and comment from NeoDB CSV."""
+    metadata = {}
+    with open(csv_file_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            title = row['title']
+            timestamp = row.get('timestamp', '')
+            rating = row.get('rating', '')
+            comment = row.get('comment', '')
+            metadata[title] = {'timestamp': timestamp, 'rating': rating, 'comment': comment}
+    return metadata
+
+def create_anilist_xml(json_file_path, output_xml_path, neodb_csv_path=None):
     """
     Convert the JSON data to AniList-compatible XML format.
     Only include entries with AniList IDs that are likely to exist in MAL database.
     """
+    # Load NeoDB metadata if provided
+    neodb_metadata = {}
+    if neodb_csv_path:
+        neodb_metadata = load_neodb_metadata(neodb_csv_path)
+    
     # Read the JSON file
     with open(json_file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
-    # Filter entries - exclude newer AniList IDs that don't exist in MAL
-    # Generally, AniList IDs above ~50000 are newer and may not have MAL equivalents
-    valid_entries = []
-    skipped_entries = []
+    # Process all entries
+    valid_entries = data['anilistImport']['lists'][0]['entries']
     
-    for entry in data['anilistImport']['lists'][0]['entries']:
-        media_id = entry['mediaId']
-        # Keep entries with lower IDs that are more likely to exist in MAL
-        if media_id <= 50000:
-            valid_entries.append(entry)
-        else:
-            skipped_entries.append(entry)
-    
-    print(f"Processing {len(valid_entries)} entries (skipping {len(skipped_entries)} newer entries)")
+    print(f"Processing {len(valid_entries)} entries")
     
     # Create root XML element
     root = ET.Element('myanimelist')
@@ -66,23 +76,12 @@ def create_anilist_xml(json_file_path, output_xml_path):
                 detailed_info = detail
                 break
         
-        # Get original comment/review if available
+        # Get original comment from NeoDB CSV
         original_comment = ""
         if detailed_info:
-            # Try to get comment from various possible fields
-            if 'comment' in detailed_info:
-                original_comment = detailed_info['comment']
-            elif 'review' in detailed_info:
-                original_comment = detailed_info['review']
-            elif 'note' in detailed_info:
-                original_comment = detailed_info['note']
-            elif 'originalTitle' in detailed_info:
-                # Use original title as context since no comments are available
-                original_comment = f"原标题: {detailed_info['originalTitle']}"
-            
-            # If still no comment, use search title
-            if not original_comment and 'searchTitle' in detailed_info:
-                original_comment = f"搜索标题: {detailed_info['searchTitle']}"
+            search_title = detailed_info.get('searchTitle', '') or detailed_info.get('originalTitle', '')
+            if search_title in neodb_metadata:
+                original_comment = neodb_metadata[search_title].get('comment', '')
         
         # Add anime details
         ET.SubElement(anime, 'series_animedb_id').text = str(entry['mediaId'])
@@ -100,14 +99,38 @@ def create_anilist_xml(json_file_path, output_xml_path):
         ET.SubElement(anime, 'series_episodes').text = '0'
         ET.SubElement(anime, 'my_id').text = '0'
         ET.SubElement(anime, 'my_watched_episodes').text = str(entry.get('progress', 0))
-        ET.SubElement(anime, 'my_start_date').text = '0000-00-00'
-        ET.SubElement(anime, 'my_finish_date').text = '0000-00-00'
+        
+        # Get dates and score from NeoDB metadata
+        start_date = '0000-00-00'
+        finish_date = '0000-00-00'
+        score = entry.get('score', 0)
+        
+        # Try to find metadata by searching title
+        if detailed_info:
+            search_title = detailed_info.get('searchTitle', '') or detailed_info.get('originalTitle', '')
+            if search_title in neodb_metadata:
+                meta = neodb_metadata[search_title]
+                if meta['timestamp']:
+                    try:
+                        ts = datetime.fromisoformat(meta['timestamp'].replace('+00:00', ''))
+                        finish_date = ts.strftime('%Y-%m-%d')
+                        start_date = (ts - timedelta(days=30)).strftime('%Y-%m-%d')
+                    except:
+                        pass
+                if meta['rating'] and not score:
+                    try:
+                        score = int(meta['rating'])
+                    except:
+                        pass
+        
+        ET.SubElement(anime, 'my_start_date').text = start_date
+        ET.SubElement(anime, 'my_finish_date').text = finish_date
         ET.SubElement(anime, 'my_rated').text = ''
-        ET.SubElement(anime, 'my_score').text = str(entry.get('score', 0))
+        ET.SubElement(anime, 'my_score').text = str(score)
         ET.SubElement(anime, 'my_dvd').text = ''
         ET.SubElement(anime, 'my_storage').text = ''
         ET.SubElement(anime, 'my_status').text = status_mapping.get(entry['status'], 'Plan to Watch')
-        ET.SubElement(anime, 'my_comments').text = original_comment  # Use original comment instead of generic text
+        ET.SubElement(anime, 'my_comments').text = original_comment
         ET.SubElement(anime, 'my_times_watched').text = '0'
         ET.SubElement(anime, 'my_rewatch_value').text = ''
         ET.SubElement(anime, 'my_priority').text = 'LOW'
@@ -129,35 +152,21 @@ def create_anilist_xml(json_file_path, output_xml_path):
     
     print(f"XML file created: {output_xml_path}")
     print(f"Total entries processed: {len(valid_entries)}")
-    print(f"Total entries skipped: {len(skipped_entries)}")
+    # print(f"Total entries skipped: {len(skipped_entries)}")
     
-    # Print status summary for processed entries
+    # Print status summary
     status_counts = {}
     for entry in valid_entries:
         status = entry['status']
         status_counts[status] = status_counts.get(status, 0) + 1
     
-    print("\nStatus breakdown (processed entries):")
+    print("\nStatus breakdown:")
     for status, count in status_counts.items():
         print(f"  {status}: {count}")
-    
-    # Print skipped entries
-    if skipped_entries:
-        print("\nSkipped entries (newer AniList IDs):")
-        for entry in sorted(skipped_entries, key=lambda x: x['mediaId']):
-            print(f"  ID {entry['mediaId']}: {entry['status']}")
-    
-    # Create a separate file for skipped entries
-    skipped_file = output_xml_path.replace('.xml', '_skipped.json')
-    with open(skipped_file, 'w', encoding='utf-8') as f:
-        json.dump({
-            'skipped_count': len(skipped_entries),
-            'entries': skipped_entries
-        }, f, indent=2, ensure_ascii=False)
-    print(f"\nSkipped entries saved to: {skipped_file}")
 
 if __name__ == "__main__":
     json_file = "anilist_import_from_neodb.json"
     xml_file = "anilist_export_filtered.xml"
+    neodb_csv = "neodb/tv_mark.csv"
     
-    create_anilist_xml(json_file, xml_file)
+    create_anilist_xml(json_file, xml_file, neodb_csv)
